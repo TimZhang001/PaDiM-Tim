@@ -31,9 +31,9 @@ device = torch.device('cuda' if use_cuda else 'cpu')
 
 def parse_args():
     parser = argparse.ArgumentParser('PaDiM')
-    parser.add_argument('--data_path', type=str, default='D:/dataset/mvtec_anomaly_detection')
-    parser.add_argument('--save_path', type=str, default='./mvtec_result')
-    parser.add_argument('--arch', type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
+    parser.add_argument('--data_path', type=str, default='./MVTec/MVTec_AD')
+    parser.add_argument('--save_path', type=str, default='./vis_result')
+    parser.add_argument('--arch',      type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
     return parser.parse_args()
 
 
@@ -44,12 +44,12 @@ def main():
     # load model
     if args.arch == 'resnet18':
         model = resnet18(pretrained=True, progress=True)
-        t_d = 448
-        d = 100
+        t_d   = 448
+        d     = 100
     elif args.arch == 'wide_resnet50_2':
         model = wide_resnet50_2(pretrained=True, progress=True)
-        t_d = 1792
-        d = 550
+        t_d   = 1792
+        d     = 550
     model.to(device)
     model.eval()
     random.seed(1024)

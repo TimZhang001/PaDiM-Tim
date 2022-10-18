@@ -48,17 +48,7 @@ def prepare_models(arch):
         
     idx = torch.tensor(sample(range(0, t_d), d))
 
-    # set model's intermediate outputs
-    outputs = []
-
-    def hook(module, input, output):
-        outputs.append(output)
-
-    model.layer1[-1].register_forward_hook(hook)
-    model.layer2[-1].register_forward_hook(hook)
-    model.layer3[-1].register_forward_hook(hook)
-
-    return model, outputs, idx
+    return model, idx
 
 def prepare_data(args, class_name):
     train_dataset    = mvtec.MVTecDataset(args.data_path, class_name=class_name, is_train=True)
@@ -80,8 +70,18 @@ def main():
     for class_name in mvtec.CLASS_NAMES:
 
         # prepare model
-        model, outputs, idx = prepare_models(args.arch)
+        model, idx = prepare_models(args.arch)
         
+        # set model's intermediate outputs
+        outputs = []
+
+        def hook(module, input, output):
+            outputs.append(output)
+
+        model.layer1[-1].register_forward_hook(hook)
+        model.layer2[-1].register_forward_hook(hook)
+        model.layer3[-1].register_forward_hook(hook)
+
         # prepare data
         train_dataloader, train_outputs = prepare_data(args, class_name)
         

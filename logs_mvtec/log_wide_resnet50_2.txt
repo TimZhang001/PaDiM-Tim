@@ -1,0 +1,1 @@
+{'arch': 'wide_resnet50_2', 'data_path': './MVTec/MVTec_AD', 'log_path': './logs_mvtec', 'model_path': './save_checkpoints', 'vis': 1}

@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default='./save_checkpoints')
     parser.add_argument('--log_path',   type=str, default='./logs_mvtec')
     parser.add_argument('--vis',        type=int, default=1)
-    parser.add_argument('--arch',       type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
+    parser.add_argument('--arch',       type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
     return parser.parse_args()
 
 def prepare_models(arch):
@@ -64,7 +64,7 @@ def prepare_models(arch):
 
 def prepare_data(args, class_name):
     test_dataset    = mvtec.MVTecDataset(args.data_path, class_name=class_name, is_train=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=32, pin_memory=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, pin_memory=True)
     test_outputs    = OrderedDict([('layer1', []), ('layer2', []), ('layer3', [])])
 
     return test_dataloader, test_outputs
@@ -121,6 +121,8 @@ def main():
         # prepare model
         model, idx = prepare_models(args.arch)
         
+        # set model's intermediate outputs
+        outputs = []
         def hook(module, input, output):
             outputs.append(output)
 

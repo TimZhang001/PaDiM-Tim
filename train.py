@@ -26,7 +26,7 @@ def parse_args():
     parser = argparse.ArgumentParser('PaDiM')
     parser.add_argument('--data_path', type=str, default='./MVTec/MVTec_AD')
     parser.add_argument('--model_path', type=str, default='./save_checkpoints')
-    parser.add_argument('--arch',      type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
+    parser.add_argument('--arch',      type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
     return parser.parse_args()
 
 def prepare_models(arch):

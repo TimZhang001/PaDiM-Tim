@@ -301,6 +301,29 @@ def visualize_results(test_img, scores, img_scores, gts, query_features, thresho
         fig_img.savefig(os.path.join(save_dir, class_name + '_{}'.format(i)), dpi=300, bbox_inches='tight')
         plt.close()
 
+def visualize_featue_results(features_result, save_dir, class_name, good_num):
+    
+    fig_img, ax_img = plt.subplots(1, 5, figsize=(15, 3), gridspec_kw={'width_ratios': [4, 4, 4, 4, 4]})
+
+    fig_img.subplots_adjust(wspace=0.05, hspace=0)
+    for ax_i in ax_img:
+        ax_i.axes.xaxis.set_visible(False)
+        ax_i.axes.yaxis.set_visible(False)
+
+    ax_img[0].imshow(features_result[0], cmap='jet')
+    ax_img[0].title.set_text('feature_layer1')
+    ax_img[1].imshow(features_result[1], cmap='jet')
+    ax_img[1].title.set_text('feature_layer2')
+    ax_img[2].imshow(features_result[2], cmap='jet')
+    ax_img[2].title.set_text('feature_layer3')
+    ax_img[3].imshow(features_result[3], cmap='jet')
+    ax_img[3].title.set_text('feature_layer')
+
+    ax_img[4].imshow(features_result[4])
+    ax_img[4].title.set_text('image_mean')
+
+    fig_img.savefig(os.path.join(save_dir, class_name + '_features_{}'.format(str(good_num))), dpi=300, bbox_inches='tight')
+    plt.close()    
 
 '''
 1. 将提取的features进行平均，得到不同layer下的平均feature map

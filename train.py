@@ -17,16 +17,17 @@ from random             import sample
 from torch.utils.data   import DataLoader
 from collections        import OrderedDict
 from tqdm               import tqdm
-from utils.util         import embedding_concat
+from utils.util         import embedding_concat, denormalization, get_save_path, visualize_featue_results
 
 # device setup
 device   = torch.device('cuda')
 
 def parse_args():
     parser = argparse.ArgumentParser('PaDiM')
-    parser.add_argument('--data_path', type=str, default='./MVTec/MVTec_AD')
+    parser.add_argument('--data_path',  type=str, default='./MVTec/MVTec_AD')
     parser.add_argument('--model_path', type=str, default='./save_checkpoints')
-    parser.add_argument('--arch',      type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
+    parser.add_argument('--arch',       type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
+    parser.add_argument('--good_num',   type=int, default=10000)
     return parser.parse_args()
 
 def prepare_models(arch):
@@ -51,7 +52,7 @@ def prepare_models(arch):
     return model, idx
 
 def prepare_data(args, class_name):
-    train_dataset    = mvtec.MVTecDataset(args.data_path, class_name=class_name, is_train=True)
+    train_dataset    = mvtec.MVTecDataset(args.data_path, class_name=class_name, is_train=True, good_num=args.good_num)
     train_dataloader = DataLoader(train_dataset, batch_size=32, pin_memory=True)
     train_outputs    = OrderedDict([('layer1', []), ('layer2', []), ('layer3', [])])
 
@@ -63,12 +64,28 @@ def prepare_save_path(args, class_name):
     train_model_path = os.path.join(train_model_path, '%s_train.pkl' % class_name)
     return train_model_path
 
+def get_mean_features(train_outputs, embedding_vectors, train_images):
+    train_outputs_mean = {k1: v1.mean(0) for k1, v1 in train_outputs.items()}
+    train_outputs_mean = {k1: v1.mean(0) for k1, v1 in train_outputs_mean.items()}
+    feature_layer1     = train_outputs_mean['layer1'].numpy()
+    feature_layer2     = train_outputs_mean['layer2'].numpy()
+    feature_layer3     = train_outputs_mean['layer3'].numpy()
+    feature_layer      = torch.mean(torch.mean(embedding_vectors, dim=0), dim=0).cpu()
+    feature_layer      = feature_layer.numpy()
+
+    # get image_mean data
+    train_images_mean = np.vstack(train_images)
+    train_images_mean = np.mean(train_images_mean, axis=(0))
+    train_images_mean = denormalization(train_images_mean)
+
+    return feature_layer1, feature_layer2, feature_layer3, feature_layer, train_images_mean
+
 def main():
 
     args  = parse_args()
     
-    for class_name in mvtec.CLASS_NAMES:
-
+    #for class_name in mvtec.CLASS_NAMES:
+    for class_name in ['grid']:
         # prepare model
         model, idx = prepare_models(args.arch)
         
@@ -89,7 +106,12 @@ def main():
         train_model_path = prepare_save_path(args, class_name)
 
         # train
-        for (x, _, _) in tqdm(train_dataloader, '| feature extraction | train | %s |' % class_name):
+        train_images = []
+        for (x, _, _,_) in tqdm(train_dataloader, '| feature extraction | train | %s |' % class_name):
+            
+            # get all image datas
+            train_images.append(x.numpy())
+
             # model prediction
             with torch.no_grad():
                 _ = model(x.to(device))
@@ -111,6 +133,11 @@ def main():
         # randomly select d dimension
         embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
         
+        # get image_mean data
+        feature_show = get_mean_features(train_outputs, embedding_vectors, train_images)
+        image_dir    = get_save_path(class_name, args.arch, "feature_show")
+        visualize_featue_results(feature_show, image_dir, class_name, args.good_num)
+
         # calculate multivariate Gaussian distribution
         B, C, H, W        = embedding_vectors.size()
         embedding_vectors = embedding_vectors.view(B, C, H * W)
@@ -120,7 +147,7 @@ def main():
         for i in range(H * W):
             # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
             cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
-        
+                
         # save learned distribution
         train_outputs = [mean, cov]
         with open(train_model_path, 'wb') as f:

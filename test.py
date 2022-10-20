@@ -117,7 +117,8 @@ def main():
     iou_score_list  = []
     
     # 
-    for class_name in mvtec.CLASS_NAMES:
+    #for class_name in mvtec.CLASS_NAMES:
+    for class_name in ['grid']:
         # prepare model
         model, idx = prepare_models(args.arch)
         
@@ -148,7 +149,7 @@ def main():
         test_imgs    = []
         
         # extract test set features
-        for (x, y, mask) in tqdm(test_dataloader, '| feature extraction | test | %s |' % class_name):
+        for (x, y, mask, path) in tqdm(test_dataloader, '| feature extraction | test | %s |' % class_name):
             test_imgs.extend(x.cpu().detach().numpy())
             gt_list.extend(y.cpu().detach().numpy())
             gt_mask_list.extend(mask.cpu().detach().numpy())

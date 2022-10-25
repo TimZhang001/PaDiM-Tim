@@ -18,6 +18,8 @@ from torch.utils.data   import DataLoader
 from collections        import OrderedDict
 from tqdm               import tqdm
 from utils.util         import embedding_concat, denormalization, get_save_path, visualize_featue_results
+from sklearn.cluster    import KMeans
+
 
 # device setup
 device   = torch.device('cuda')
@@ -58,7 +60,7 @@ def prepare_data(args, class_name):
 
     return train_dataloader, train_outputs
 
-def prepare_save_path(args, class_name):
+def prepare_save_path(args, class_name, add_str=''):
     train_model_path = os.path.join(args.model_path, '%s' % args.arch)
     os.makedirs(train_model_path, exist_ok=True)
     train_model_path = os.path.join(train_model_path, '%s_train.pkl' % class_name)
@@ -85,7 +87,7 @@ def main():
     args  = parse_args()
     
     #for class_name in mvtec.CLASS_NAMES:
-    for class_name in ['grid']:
+    for class_name in ['screw']:
         # prepare model
         model, idx = prepare_models(args.arch)
         
@@ -138,21 +140,63 @@ def main():
         image_dir    = get_save_path(class_name, args.arch, "feature_show")
         visualize_featue_results(feature_show, image_dir, class_name, args.good_num)
 
-        # calculate multivariate Gaussian distribution
         B, C, H, W        = embedding_vectors.size()
         embedding_vectors = embedding_vectors.view(B, C, H * W)
-        mean              = torch.mean(embedding_vectors, dim=0).numpy()
-        cov               = torch.zeros(C, C, H * W).numpy()
-        I                 = np.identity(C)
-        for i in range(H * W):
-            # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
-            cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
-                
-        # save learned distribution
+
+        # calculate multivariate Gaussian distribution and save learned distribution
+        mean, cov         = get_mean_cov(embedding_vectors)
         train_outputs = [mean, cov]
         with open(train_model_path, 'wb') as f:
             pickle.dump(train_outputs, f)
 
+        # calculate multi multivariate Gaussian distribution and save learned distribution
+        mean0, cov0, mean1, cov1 = cluster_feature_get_mean_cov(embedding_vectors)
+        train_outputs = [mean0, cov0, mean1, cov1]
+        with open(train_model_path, 'wb') as f:
+            pickle.dump(train_outputs, f)
+
+def get_mean_cov(embedding_vectors):
+    B, C, N = embedding_vectors.size()
+    mean    = torch.mean(embedding_vectors, dim=0).numpy()
+    cov     = torch.zeros(C, C, N).numpy()
+    I       = np.identity(C)
+    for i in tqdm(range(N)):
+        # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
+        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+
+    return mean, cov
+
+def cluster_feature_get_mean_cov(embedding_vectors):
+    B, C, N    = embedding_vectors.size()
+    I          = np.identity(C)
+    cov0       = torch.zeros(C, C, N).numpy()
+    mean0      = torch.zeros(C, N).numpy()
+    cov1       = torch.zeros(C, C, N).numpy()
+    mean1      = torch.zeros(C, N).numpy()      
+
+    # 假如我要构造一个聚类数为2的聚类器
+    estimator  = KMeans(n_clusters=2)#构造聚类器
+    
+    # 在每个位置上进行聚类，将输入的样本分为两类   
+    for i in tqdm(range(N)):
+        estimator.fit(embedding_vectors[:, :, i].numpy())
+        pred_label = estimator.labels_          #获取聚类标签
+        centroids  = estimator.cluster_centers_ #获取聚类中心
+        inertia    = estimator.inertia_         #获取聚类准则的总和
+
+        vectors0   = embedding_vectors[:, :, i].numpy()[pred_label == 0]
+        vectors1   = embedding_vectors[:, :, i].numpy()[pred_label == 1]
+        cur_mean0  = np.mean(vectors0, axis=0)
+        cur_mean1  = np.mean(vectors1, axis=0)
+        cur_cov0   = np.cov(vectors0, rowvar=False) + 0.01 * I
+        cur_cov1   = np.cov(vectors1, rowvar=False) + 0.01 * I
+
+        mean0[:, i]   = cur_mean0
+        mean1[:, i]   = cur_mean1
+        cov0[:, :, i] = cur_cov0
+        cov1[:, :, i] = cur_cov1
+
+    return mean0, cov0, mean1, cov1
 
 if __name__ == '__main__':
     main()

@@ -91,14 +91,23 @@ def cal_mahalanobis_distance(test_outputs, train_outputs, idx):
     # calculate distance matrix
     B, C, H, W        = embedding_vectors.size()
     embedding_vectors = embedding_vectors.view(B, C, H * W).numpy()
-    dist_list         = []
-    for i in range(H * W):
-        mean     = train_outputs[0][:, i]
-        conv_inv = np.linalg.inv(train_outputs[1][:, :, i])
-        dist     = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
-        dist_list.append(dist)
 
-    dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
+    dist_list         = []
+    model_num         = int(len(train_outputs) / 2)
+    for j in range(model_num):
+        cur_dist_list = []
+        for i in tqdm(range(H * W)):
+            mean     = train_outputs[j*2+0][:, i]
+            conv_inv = np.linalg.inv(train_outputs[j*2+1][:, :, i])
+            dist     = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
+            cur_dist_list.append(dist)
+
+        cur_dist_list = np.array(cur_dist_list).transpose(1, 0).reshape(B, H, W)
+        dist_list.append(cur_dist_list)
+
+    # min of the dist_list
+    dist_list = np.array(dist_list)
+    dist_list = np.min(dist_list, axis=0)
 
     return dist_list
 
@@ -118,7 +127,7 @@ def main():
     
     # 
     #for class_name in mvtec.CLASS_NAMES:
-    for class_name in ['grid']:
+    for class_name in ['screw']:
         # prepare model
         model, idx = prepare_models(args.arch)
         

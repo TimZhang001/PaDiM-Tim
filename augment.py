@@ -57,7 +57,7 @@ def parse_args():
 def main():
 
     args  = parse_args()
-    for class_name in ['metal_nut']:
+    for class_name in mvtec.CLASS_NAMES:
         train_dataset    = mvtec.MVTecDatasetAugment(args.data_path, class_name=class_name, is_train=True)
         train_dataloader = DataLoader(train_dataset, batch_size=1, pin_memory=True)
 

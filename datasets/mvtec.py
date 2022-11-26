@@ -61,8 +61,8 @@ class MVTecDataset(Dataset):
         return len(self.x)
 
     def load_dataset_folder(self, good_num=None):
-        #phase = 'train' if self.is_train else 'test'
-        phase = 'train_augment' if self.is_train else 'test'
+        phase = 'train' if self.is_train else 'test'
+        #phase = 'train_augment' if self.is_train else 'test'
         x, y, mask = [], [], []
 
         img_dir = os.path.join(self.dataset_path, self.class_name, phase)

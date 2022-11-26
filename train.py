@@ -17,7 +17,8 @@ from random             import sample
 from torch.utils.data   import DataLoader
 from collections        import OrderedDict
 from tqdm               import tqdm
-from utils.util         import embedding_concat, denormalization, get_save_path, visualize_featue_results
+from utils.util         import embedding_concat, denormalization, get_save_path, visualize_featue_map, visualize_CovMatrix
+from kmeans_pytorch     import kmeans
 from sklearn.cluster    import KMeans
 
 
@@ -30,18 +31,22 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default='./save_checkpoints')
     parser.add_argument('--arch',       type=str, choices=['resnet18', 'wide_resnet50_2'], default='resnet18')
     parser.add_argument('--good_num',   type=int, default=10000)
+    parser.add_argument('--kmeans',     type=int, default=2)
+    parser.add_argument('--idx_num',    type=int, default=100)
     return parser.parse_args()
 
-def prepare_models(arch):
+def prepare_models(arch, idx_num):
     # load model
     if arch == 'resnet18':
         model = resnet18(pretrained=True, progress=True)
         t_d   = 448
         d     = 100
+        d     = idx_num
     elif arch == 'wide_resnet50_2':
         model = wide_resnet50_2(pretrained=True, progress=True)
         t_d   = 1792
         d     = 550
+        d     = idx_num
 
     model.to(device)
     model.eval()
@@ -61,7 +66,7 @@ def prepare_data(args, class_name):
     return train_dataloader, train_outputs
 
 def prepare_save_path(args, class_name, add_str=''):
-    train_model_path = os.path.join(args.model_path, '%s' % args.arch)
+    train_model_path = os.path.join(args.model_path, '%s' % args.arch, 'kmeans_{}_idx_{}'.format(args.kmeans, args.idx_num))
     os.makedirs(train_model_path, exist_ok=True)
     train_model_path = os.path.join(train_model_path, '%s_train.pkl' % class_name)
     return train_model_path
@@ -82,14 +87,167 @@ def get_mean_features(train_outputs, embedding_vectors, train_images):
 
     return feature_layer1, feature_layer2, feature_layer3, feature_layer, train_images_mean
 
+# 直接对特征进行每个点的高斯分布拟合（均值和协方差计算）
+def get_mean_cov(embedding_vectors):
+    B, C, N = embedding_vectors.size()
+    mean    = torch.mean(embedding_vectors, dim=0).numpy()
+    cov     = torch.zeros(C, C, N).numpy()
+    I       = np.identity(C)
+    for i in tqdm(range(N)):
+        # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
+        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+
+    return mean, cov
+
+def pairwise_distance(data1, data2, device=torch.device('cpu')):
+    # transfer to device
+    data1, data2 = data1.to(device), data2.to(device)
+
+    dis = (data1 - data2) ** 2.0
+
+    # return N*N matrix for pairwise distance
+    dis = dis.sum(dim=-1).squeeze()
+    return dis
+
+# 对特征进行聚类操作，聚类完毕后再进行每个点的均值和协方差计算
+def cluster_get_mean_cov(embedding_vectors, kmeans_num=2):
+    B, C, N    = embedding_vectors.size()
+    I          = np.identity(C)
+    cov        = torch.zeros(kmeans_num+1, C, C, N).numpy()
+    mean       = torch.zeros(kmeans_num+1, C, N).numpy()  
+
+    pred_label_list = []
+    dis_center_list = []
+
+    if kmeans_num > 1:
+        #--------------------------------------------------------------------------------
+        for i in tqdm(range(N)):
+            X                       = embedding_vectors[:, :, i]
+            pred_label, pred_center = kmeans(X=X, num_clusters=kmeans_num, distance='cosine', device=torch.device('cuda:0'))
+            pred_label              = pred_label.cpu().numpy()
+
+            dis_center              = pairwise_distance(pred_center[1,:], pred_center[0,:])
+            dis_center_list.append(dis_center)
+            pred_label_list.append(pred_label)
+        
+        #--------------------------------------------------------------------------------
+        score_val = np.mean(dis_center_list) + 1.0 * np.std(dis_center_list)
+        for i in tqdm(range(N)):
+            if dis_center_list[i] < score_val:
+
+                # 0, 1, ..., kmeans_num-1
+                for j in range(kmeans_num):           
+                    cov[j, :, :, i] = 0.01 * I
+
+                # kmeans_num
+                vectors                  = embedding_vectors[:, :, i].numpy()
+                mean[kmeans_num, :, i]   = np.mean(vectors, axis=0)
+                cov[kmeans_num, :, :, i] = np.cov(vectors, rowvar=False) + 0.01 * I
+            else:
+                # 0, 1, ..., kmeans_num-1
+                for j in range(kmeans_num):           
+                    pred_label      = pred_label_list[i]
+                    index           = np.where(pred_label == j)
+                    vectors         = embedding_vectors[:, :, i].numpy()[index]
+                    mean[j, :, i]   = np.mean(vectors, axis=0)
+                    cov[j, :, :, i] = np.cov(vectors, rowvar=False) + 0.01 * I
+                
+                # kmeans_num
+                cov[kmeans_num, :, :, i] = 0.01 * I
+    else:
+        mean[0, :, :] = torch.mean(embedding_vectors, dim=0).numpy()
+        for i in tqdm(range(N)):
+            # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
+            cov[0, :, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+                
+    return mean, cov 
+
+# 对特征进行聚类操作，聚类完毕后再进行每个点的均值和协方差计算
+def cluster_get_mean_cov2(embedding_vectors, kmeans_num=2):
+    B, C, N    = embedding_vectors.size()
+    I          = np.identity(C)
+    cov        = torch.zeros(kmeans_num+1, C, C, N).numpy()
+    mean       = torch.zeros(kmeans_num+1, C, N).numpy()  
+
+    pred_label_list = []
+    dis_center_list = []
+
+    if kmeans_num > 1:
+        #--------------------------------------------------------------------------------
+        for i in tqdm(range(N)):
+            X                       = embedding_vectors[:, :, i]
+            pred_label, pred_center = kmeans(X=X, num_clusters=kmeans_num, distance='cosine', device=torch.device('cuda:0'))
+            pred_label              = pred_label.cpu().numpy()
+
+            dis_center              = pairwise_distance(pred_center[1,:], pred_center[0,:])
+            dis_center_list.append(dis_center)
+            pred_label_list.append(pred_label)
+        
+        #--------------------------------------------------------------------------------
+        score_val = np.mean(dis_center_list) + 1.0 * np.std(dis_center_list)
+        for i in tqdm(range(N)):
+            
+            # 均值和协方差的初值
+            vectors = embedding_vectors[:, :, i].numpy()
+            for j in range(kmeans_num+1):           
+                mean[j, :, i]   = np.mean(vectors, axis=0)
+                cov[j, :, :, i] = 0.01 * I
+            
+            if dis_center_list[i] < score_val:
+                # kmeans_num 更改协方差
+                vectors                  = embedding_vectors[:, :, i].numpy()
+                cov[kmeans_num, :, :, i] = np.cov(vectors, rowvar=False) + 0.01 * I
+            else:
+                # 0, 1, ..., kmeans_num-1 更改均值和协方差
+                for j in range(kmeans_num):           
+                    pred_label      = pred_label_list[i]
+                    index           = np.where(pred_label == j)
+                    vectors         = embedding_vectors[:, :, i].numpy()[index]
+                    mean[j, :, i]   = np.mean(vectors, axis=0)
+                    cov[j, :, :, i] = np.cov(vectors, rowvar=False) + 0.01 * I
+    else:
+        mean[0, :, :] = torch.mean(embedding_vectors, dim=0).numpy()
+        for i in tqdm(range(N)):
+            # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
+            cov[0, :, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+                
+    return mean, cov 
+
+def cluster_get_mean_cov1(embedding_vectors, kmeans_num=2):
+    B, C, N    = embedding_vectors.size()
+    I          = np.identity(C)
+    cov        = torch.zeros(kmeans_num, C, C, N).numpy()
+    mean       = torch.zeros(kmeans_num, C, N).numpy()  
+    
+    # 在每个位置上进行聚类，将输入的样本分为两类   
+    if kmeans_num > 1:
+        for i in tqdm(range(N)):
+            X                       = embedding_vectors[:, :, i]
+            pred_label, pred_center = kmeans(X=X, num_clusters=kmeans_num, distance='cosine', device=torch.device('cuda:0'))
+            pred_label              = pred_label.cpu().numpy()
+
+            for j in range(kmeans_num):
+                index           = np.where(pred_label == j)
+                vectors         = embedding_vectors[:, :, i].numpy()[index]
+                mean[j, :, i]   = np.mean(vectors, axis=0)
+                cov[j, :, :, i] = np.cov(vectors, rowvar=False) + 0.01 * I
+    else:
+        mean[0, :, :] = torch.mean(embedding_vectors, dim=0).numpy()
+        for i in tqdm(range(N)):
+            cov[0, :, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+
+    return mean, cov 
+
 def main():
 
     args  = parse_args()
+
+    torch.cuda.set_device(1)
     
-    #for class_name in mvtec.CLASS_NAMES:
-    for class_name in ['screw']:
+    for class_name in mvtec.CLASS_NAMES:
+    #for class_name in ['screw']: #screw hazelnut
         # prepare model
-        model, idx = prepare_models(args.arch)
+        model, idx = prepare_models(args.arch, args.idx_num)
         
         # set model's intermediate outputs
         outputs = []
@@ -106,6 +264,8 @@ def main():
         
         # extract train set features
         train_model_path = prepare_save_path(args, class_name)
+
+        feature_path     = get_save_path(class_name, args.arch, "feature_show")
 
         # train
         train_images = []
@@ -136,67 +296,21 @@ def main():
         embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
         
         # get image_mean data
-        feature_show = get_mean_features(train_outputs, embedding_vectors, train_images)
-        image_dir    = get_save_path(class_name, args.arch, "feature_show")
-        visualize_featue_results(feature_show, image_dir, class_name, args.good_num)
+        feature_show      = get_mean_features(train_outputs, embedding_vectors, train_images)
+        visualize_featue_map(feature_show, feature_path, class_name, args.good_num)
 
         B, C, H, W        = embedding_vectors.size()
         embedding_vectors = embedding_vectors.view(B, C, H * W)
 
-        # calculate multivariate Gaussian distribution and save learned distribution
-        mean, cov         = get_mean_cov(embedding_vectors)
+        # calculate multi multivariate Gaussian distribution and save learned distribution
+        mean, cov        = cluster_get_mean_cov1(embedding_vectors, args.kmeans)
+        image_dir        = get_save_path(class_name, args.arch, add_str=str(args.kmeans))
+        visualize_CovMatrix(mean, cov, image_dir, class_name)
+    
+        # save learned distribution
         train_outputs = [mean, cov]
         with open(train_model_path, 'wb') as f:
             pickle.dump(train_outputs, f)
-
-        # calculate multi multivariate Gaussian distribution and save learned distribution
-        mean0, cov0, mean1, cov1 = cluster_feature_get_mean_cov(embedding_vectors)
-        train_outputs = [mean0, cov0, mean1, cov1]
-        with open(train_model_path, 'wb') as f:
-            pickle.dump(train_outputs, f)
-
-def get_mean_cov(embedding_vectors):
-    B, C, N = embedding_vectors.size()
-    mean    = torch.mean(embedding_vectors, dim=0).numpy()
-    cov     = torch.zeros(C, C, N).numpy()
-    I       = np.identity(C)
-    for i in tqdm(range(N)):
-        # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
-        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
-
-    return mean, cov
-
-def cluster_feature_get_mean_cov(embedding_vectors):
-    B, C, N    = embedding_vectors.size()
-    I          = np.identity(C)
-    cov0       = torch.zeros(C, C, N).numpy()
-    mean0      = torch.zeros(C, N).numpy()
-    cov1       = torch.zeros(C, C, N).numpy()
-    mean1      = torch.zeros(C, N).numpy()      
-
-    # 假如我要构造一个聚类数为2的聚类器
-    estimator  = KMeans(n_clusters=2)#构造聚类器
-    
-    # 在每个位置上进行聚类，将输入的样本分为两类   
-    for i in tqdm(range(N)):
-        estimator.fit(embedding_vectors[:, :, i].numpy())
-        pred_label = estimator.labels_          #获取聚类标签
-        centroids  = estimator.cluster_centers_ #获取聚类中心
-        inertia    = estimator.inertia_         #获取聚类准则的总和
-
-        vectors0   = embedding_vectors[:, :, i].numpy()[pred_label == 0]
-        vectors1   = embedding_vectors[:, :, i].numpy()[pred_label == 1]
-        cur_mean0  = np.mean(vectors0, axis=0)
-        cur_mean1  = np.mean(vectors1, axis=0)
-        cur_cov0   = np.cov(vectors0, rowvar=False) + 0.01 * I
-        cur_cov1   = np.cov(vectors1, rowvar=False) + 0.01 * I
-
-        mean0[:, i]   = cur_mean0
-        mean1[:, i]   = cur_mean1
-        cov0[:, :, i] = cur_cov0
-        cov1[:, :, i] = cur_cov1
-
-    return mean0, cov0, mean1, cov1
 
 if __name__ == '__main__':
     main()
